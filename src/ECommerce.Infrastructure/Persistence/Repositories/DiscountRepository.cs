@@ -42,6 +42,7 @@ public class DiscountRepository : IDiscountRepository
         var now = DateTime.UtcNow;
 
         return await _context.Discounts
+            .AsNoTracking()
             .Where(d => d.IsActive
                 && d.StartsAt <= now
                 && (d.EndsAt == null || d.EndsAt.Value >= now)

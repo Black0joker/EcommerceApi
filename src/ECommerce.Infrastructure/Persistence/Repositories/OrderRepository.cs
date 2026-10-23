@@ -17,6 +17,7 @@ public class OrderRepository : IOrderRepository
     public async Task<Order?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await _context.Orders
+            .AsNoTracking()
             .Include(o => o.Items)
             .Include(o => o.ShippingAddress)
             .FirstOrDefaultAsync(o => o.Id == id, cancellationToken);
@@ -38,16 +39,17 @@ public class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(o => o.OrderNumber == orderNumber, cancellationToken);
     }
 
-    public async Task<Order?> GetByIdempotencyKeyAsync(string idempotencyKey, CancellationToken cancellationToken = default)
+    public async Task<Order?> GetByIdempotencyKeyAsync(Guid userId, string idempotencyKey, CancellationToken cancellationToken = default)
     {
         return await _context.Orders
             .Include(o => o.Items)
-            .FirstOrDefaultAsync(o => o.IdempotencyKey == idempotencyKey, cancellationToken);
+            .FirstOrDefaultAsync(o => o.UserId == userId && o.IdempotencyKey == idempotencyKey, cancellationToken);
     }
 
     public async Task<IReadOnlyList<Order>> GetByUserIdAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await _context.Orders
+            .AsNoTracking()
             .Include(o => o.Items)
             .Where(o => o.UserId == userId)
             .OrderByDescending(o => o.CreatedAt)
@@ -57,6 +59,7 @@ public class OrderRepository : IOrderRepository
     public async Task<IReadOnlyList<Order>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         return await _context.Orders
+            .AsNoTracking()
             .Include(o => o.Items)
             .OrderByDescending(o => o.CreatedAt)
             .ToListAsync(cancellationToken);

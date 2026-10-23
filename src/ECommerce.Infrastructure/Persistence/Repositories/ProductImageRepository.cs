@@ -23,6 +23,7 @@ public class ProductImageRepository : IProductImageRepository
     public async Task<IReadOnlyList<ProductImage>> GetByProductIdAsync(Guid productId, CancellationToken cancellationToken = default)
     {
         return await _context.ProductImages
+            .AsNoTracking()
             .Where(i => i.ProductId == productId)
             .OrderBy(i => i.DisplayOrder)
             .ToListAsync(cancellationToken);
@@ -31,12 +32,14 @@ public class ProductImageRepository : IProductImageRepository
     public async Task<ProductImage?> GetPrimaryByProductIdAsync(Guid productId, CancellationToken cancellationToken = default)
     {
         return await _context.ProductImages
+            .AsNoTracking()
             .FirstOrDefaultAsync(i => i.ProductId == productId && i.IsPrimary, cancellationToken);
     }
 
     public async Task<IReadOnlyList<ProductImage>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         return await _context.ProductImages
+            .AsNoTracking()
             .OrderBy(i => i.DisplayOrder)
             .ToListAsync(cancellationToken);
     }

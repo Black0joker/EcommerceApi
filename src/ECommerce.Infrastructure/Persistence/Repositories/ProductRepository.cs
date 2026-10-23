@@ -27,6 +27,7 @@ public class ProductRepository : IProductRepository
     public async Task<IReadOnlyList<Product>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         return await _context.Products
+            .AsNoTracking()
             .Include(p => p.ProductCategories)
             .Include(p => p.InventoryItem)
             .ToListAsync(cancellationToken);
@@ -35,6 +36,7 @@ public class ProductRepository : IProductRepository
     public async Task<Product?> GetBySlugAsync(string slug, CancellationToken cancellationToken = default)
     {
         return await _context.Products
+            .AsNoTracking()
             .Include(p => p.ProductCategories)
             .Include(p => p.InventoryItem)
             .Include(p => p.Reviews)
@@ -44,6 +46,7 @@ public class ProductRepository : IProductRepository
     public async Task<Product?> GetBySkuAsync(string sku, CancellationToken cancellationToken = default)
     {
         return await _context.Products
+            .AsNoTracking()
             .Include(p => p.ProductCategories)
             .Include(p => p.InventoryItem)
             .FirstOrDefaultAsync(p => p.SKU == sku, cancellationToken);
@@ -58,8 +61,10 @@ public class ProductRepository : IProductRepository
 
         // Batch load for checkout-style flows: only category links are needed
         // (discount restrictions). Deliberately no Reviews/OrderItems/InventoryItem
-        // includes to keep the query light.
+        // includes to keep the query light. AsNoTracking: callers only read
+        // prices/availability - inventory mutations use separately loaded entities.
         return await _context.Products
+            .AsNoTracking()
             .Where(p => ids.Contains(p.Id))
             .Include(p => p.ProductCategories)
             .ToListAsync(cancellationToken);
@@ -93,6 +98,7 @@ public class ProductRepository : IProductRepository
         CancellationToken cancellationToken = default)
     {
         var query = _context.Products
+            .AsNoTracking()
             .Include(p => p.ProductCategories)
             .Include(p => p.InventoryItem)
             .Include(p => p.Reviews)
@@ -182,6 +188,7 @@ public class ProductRepository : IProductRepository
         {
             // If no categories, just return random active products
             return await _context.Products
+                .AsNoTracking()
                 .Where(p => p.IsActive && p.Id != productId)
                 .OrderBy(p => p.CreatedAt)
                 .Take(count)
@@ -189,6 +196,7 @@ public class ProductRepository : IProductRepository
         }
 
         return await _context.Products
+            .AsNoTracking()
             .Where(p => p.IsActive && p.Id != productId)
             .Where(p => p.ProductCategories.Any(pc => categoryIds.Contains(pc.CategoryId)))
             .Take(count)

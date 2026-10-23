@@ -41,6 +41,7 @@ public class InventoryRepository : IInventoryRepository
     public async Task<IReadOnlyList<InventoryTransaction>> GetTransactionsByProductIdAsync(Guid productId, CancellationToken cancellationToken = default)
     {
         return await _context.InventoryTransactions
+            .AsNoTracking()
             .Where(t => t.ProductId == productId)
             .OrderByDescending(t => t.CreatedAt)
             .ToListAsync(cancellationToken);
@@ -53,7 +54,7 @@ public class InventoryRepository : IInventoryRepository
 
     public async Task<IReadOnlyList<InventoryItem>> GetAllAsync(CancellationToken cancellationToken = default)
     {
-        return await _context.InventoryItems.ToListAsync(cancellationToken);
+        return await _context.InventoryItems.AsNoTracking().ToListAsync(cancellationToken);
     }
 
     public async Task AddAsync(InventoryItem entity, CancellationToken cancellationToken = default)

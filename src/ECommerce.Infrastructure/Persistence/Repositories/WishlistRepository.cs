@@ -17,12 +17,14 @@ public class WishlistRepository : IWishlistRepository
     public async Task<Wishlist?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await _context.Wishlists
+            .AsNoTracking()
             .FirstOrDefaultAsync(w => w.Id == id, cancellationToken);
     }
 
     public async Task<Wishlist?> GetByUserIdAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await _context.Wishlists
+            .AsNoTracking()
             .FirstOrDefaultAsync(w => w.UserId == userId, cancellationToken);
     }
 
@@ -36,7 +38,7 @@ public class WishlistRepository : IWishlistRepository
 
     public async Task<IReadOnlyList<Wishlist>> GetAllAsync(CancellationToken cancellationToken = default)
     {
-        return await _context.Wishlists.ToListAsync(cancellationToken);
+        return await _context.Wishlists.AsNoTracking().ToListAsync(cancellationToken);
     }
 
     public async Task AddAsync(Wishlist entity, CancellationToken cancellationToken = default)

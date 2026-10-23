@@ -54,6 +54,29 @@ builder.Services.AddAuthorization();
 builder.Services.AddHttpContextAccessor();
 
 // ---------------------------------------------------------------------------
+// CORS (configurable via the "Cors:AllowedOrigins" configuration section).
+// Defaults to http://localhost:4200 for local Angular development.
+// Set to ["*"] to allow any origin (no credentials).
+// ---------------------------------------------------------------------------
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? ["http://localhost:4200", "https://localhost:4200"];
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("Default", policy =>
+    {
+        if (allowedOrigins.Contains("*"))
+        {
+            policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+        }
+        else
+        {
+            policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials();
+        }
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Rate limiting (configurable via the "RateLimiting" configuration section).
 // Sensitive endpoints (auth, review creation) get stricter per-IP fixed
 // windows on top of the global sliding window.
@@ -184,6 +207,8 @@ app.UseStaticFiles(new StaticFileOptions
     FileProvider = new PhysicalFileProvider(uploadsPath),
     RequestPath = "/uploads"
 });
+
+app.UseCors("Default");
 
 app.UseRateLimiter();
 
