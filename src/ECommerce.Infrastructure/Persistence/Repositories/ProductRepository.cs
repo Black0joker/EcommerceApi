@@ -16,16 +16,35 @@ public class ProductRepository : IProductRepository
 
     public async Task<Product?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
+        // Lightweight single-table load for existence checks and flows that
+        // only need scalar product fields. Navigations are intentionally not
+        // included: loading Reviews/OrderItems here used to pull the entire
+        // review and order-item history on every call (e.g. add-to-cart).
+        return await _context.Products
+            .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+    }
+
+    public async Task<Product?> GetByIdWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        // Read-side detail graph. OrderItems are deliberately excluded:
+        // order history is never needed by the detail endpoint and would
+        // load one row per unit ever sold for popular products.
         return await _context.Products
             .Include(p => p.ProductCategories)
             .Include(p => p.InventoryItem)
             .Include(p => p.Reviews)
-            .Include(p => p.OrderItems)
             .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+    }
+
+    public async Task<bool> HasOrderItemsAsync(Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.OrderItems
+            .AnyAsync(oi => oi.ProductId == productId, cancellationToken);
     }
 
     public async Task<IReadOnlyList<Product>> GetAllAsync(CancellationToken cancellationToken = default)
     {
+        // Pure read (write paths load by id/slug): skip change tracking.
         return await _context.Products
             .AsNoTracking()
             .Include(p => p.ProductCategories)
@@ -33,18 +52,31 @@ public class ProductRepository : IProductRepository
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<Product?> GetBySlugAsync(string slug, CancellationToken cancellationToken = default)
+    public async Task<ProductDetailRead?> GetBySlugAsync(string slug, CancellationToken cancellationToken = default)
     {
+        // Single no-tracking projection (also served from cache): no entity
+        // graph, stock and rating read from persisted aggregates.
         return await _context.Products
-            .AsNoTracking()
-            .Include(p => p.ProductCategories)
-            .Include(p => p.InventoryItem)
-            .Include(p => p.Reviews)
-            .FirstOrDefaultAsync(p => p.Slug == slug, cancellationToken);
+            .Where(p => p.Slug == slug)
+            .Select(p => new ProductDetailRead(
+                p.Id,
+                p.Name,
+                p.Slug,
+                p.Description,
+                p.SKU,
+                p.Price,
+                p.CompareAtPrice,
+                p.IsActive,
+                p.InventoryItem != null ? p.InventoryItem.AvailableQuantity : 0,
+                p.AverageRating,
+                p.RatingCount,
+                p.CreatedAt))
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<Product?> GetBySkuAsync(string sku, CancellationToken cancellationToken = default)
     {
+        // Pure read: skip change tracking.
         return await _context.Products
             .AsNoTracking()
             .Include(p => p.ProductCategories)
@@ -61,8 +93,8 @@ public class ProductRepository : IProductRepository
 
         // Batch load for checkout-style flows: only category links are needed
         // (discount restrictions). Deliberately no Reviews/OrderItems/InventoryItem
-        // includes to keep the query light. AsNoTracking: callers only read
-        // prices/availability - inventory mutations use separately loaded entities.
+        // includes to keep the query light. Callers only read price/stock;
+        // inventory rows are loaded and mutated separately.
         return await _context.Products
             .AsNoTracking()
             .Where(p => ids.Contains(p.Id))
@@ -97,24 +129,27 @@ public class ProductRepository : IProductRepository
         string? sortBy,
         CancellationToken cancellationToken = default)
     {
+        // No Reviews include: rating filtering/sorting uses the persisted
+        // AverageRating/RatingCount aggregates on Product. Listing is a pure
+        // read, so skip change tracking.
         var query = _context.Products
             .AsNoTracking()
             .Include(p => p.ProductCategories)
             .Include(p => p.InventoryItem)
-            .Include(p => p.Reviews)
             .AsQueryable();
 
         // Only active products for public queries
         query = query.Where(p => p.IsActive);
 
-        // Search
+        // Search. Plain Contains: wrapping the columns in LOWER() is
+        // non-sargable and defeats IX_Products_Name; SQL Server's default
+        // collation is case-insensitive, so no lowercasing is needed.
         if (!string.IsNullOrWhiteSpace(search))
         {
-            var searchLower = search.ToLower();
             query = query.Where(p =>
-                p.Name.ToLower().Contains(searchLower) ||
-                (p.Description != null && p.Description.ToLower().Contains(searchLower)) ||
-                p.SKU.ToLower().Contains(searchLower));
+                p.Name.Contains(search) ||
+                (p.Description != null && p.Description.Contains(search)) ||
+                p.SKU.Contains(search));
         }
 
         // Filter by category
@@ -134,15 +169,17 @@ public class ProductRepository : IProductRepository
             query = query.Where(p => p.Price <= maxPrice.Value);
         }
 
-        // Filter by rating
+        // Filter by rating using the persisted approved-review aggregates
+        // (indexed on Product) instead of a correlated Reviews.Average
+        // subquery evaluated per row.
         if (minRating.HasValue)
         {
-            query = query.Where(p => p.Reviews.Any() && p.Reviews.Average(r => r.Rating) >= minRating.Value);
+            query = query.Where(p => p.RatingCount > 0 && p.AverageRating >= minRating.Value);
         }
 
         if (maxRating.HasValue)
         {
-            query = query.Where(p => p.Reviews.Any() && p.Reviews.Average(r => r.Rating) <= maxRating.Value);
+            query = query.Where(p => p.RatingCount > 0 && p.AverageRating <= maxRating.Value);
         }
 
         // Filter by availability
@@ -161,7 +198,7 @@ public class ProductRepository : IProductRepository
             "name_asc" => query.OrderBy(p => p.Name),
             "name_desc" => query.OrderByDescending(p => p.Name),
             "newest" => query.OrderByDescending(p => p.CreatedAt),
-            "rating" => query.OrderByDescending(p => p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0),
+            "rating" => query.OrderByDescending(p => p.AverageRating),
             _ => query.OrderByDescending(p => p.CreatedAt)
         };
 
@@ -178,28 +215,71 @@ public class ProductRepository : IProductRepository
         return await _context.Products.AnyAsync(p => p.SKU == sku, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<Product>> GetRelatedProductsAsync(
+    public async Task<ProductDetailRead?> GetProductDetailAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        // Single no-tracking projection for the detail page: scalar fields,
+        // available stock and the persisted rating aggregates. Replaces the
+        // heavy include graph plus the separate average-rating round-trip.
+        return await _context.Products
+            .Where(p => p.Id == id)
+            .Select(p => new ProductDetailRead(
+                p.Id,
+                p.Name,
+                p.Slug,
+                p.Description,
+                p.SKU,
+                p.Price,
+                p.CompareAtPrice,
+                p.IsActive,
+                p.InventoryItem != null ? p.InventoryItem.AvailableQuantity : 0,
+                p.AverageRating,
+                p.RatingCount,
+                p.CreatedAt))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<List<Guid>?> GetCategoryIdsAsync(Guid productId, CancellationToken cancellationToken = default)
+    {
+        var exists = await _context.Products
+            .AnyAsync(p => p.Id == productId, cancellationToken);
+        if (!exists)
+        {
+            return null;
+        }
+
+        return await _context.ProductCategories
+            .Where(pc => pc.ProductId == productId)
+            .Select(pc => pc.CategoryId)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<RelatedProductRead>> GetRelatedProductsAsync(
         Guid productId,
         List<Guid> categoryIds,
         int count,
         CancellationToken cancellationToken = default)
     {
-        if (categoryIds.Count == 0)
+        var query = _context.Products
+            .Where(p => p.IsActive && p.Id != productId);
+
+        if (categoryIds.Count > 0)
         {
-            // If no categories, just return random active products
-            return await _context.Products
-                .AsNoTracking()
-                .Where(p => p.IsActive && p.Id != productId)
-                .OrderBy(p => p.CreatedAt)
-                .Take(count)
-                .ToListAsync(cancellationToken);
+            query = query.Where(p => p.ProductCategories.Any(pc => categoryIds.Contains(pc.CategoryId)));
         }
 
-        return await _context.Products
-            .AsNoTracking()
-            .Where(p => p.IsActive && p.Id != productId)
-            .Where(p => p.ProductCategories.Any(pc => categoryIds.Contains(pc.CategoryId)))
+        // Server-side projection: only display fields are materialized and
+        // ratings come from the persisted aggregates, so the cached payload
+        // is a flat list instead of an entity graph.
+        return await query
+            .OrderBy(p => p.CreatedAt)
             .Take(count)
+            .Select(p => new RelatedProductRead(
+                p.Id,
+                p.Name,
+                p.Slug,
+                p.Price,
+                p.CompareAtPrice,
+                p.AverageRating))
             .ToListAsync(cancellationToken);
     }
 

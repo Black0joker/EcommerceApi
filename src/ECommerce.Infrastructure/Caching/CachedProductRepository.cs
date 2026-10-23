@@ -30,22 +30,65 @@ public class CachedProductRepository : IProductRepository
         return _inner.GetByIdAsync(id, cancellationToken);
     }
 
-    public async Task<Product?> GetBySlugAsync(string slug, CancellationToken cancellationToken = default)
+    public Task<Product?> GetByIdWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        var cacheKey = CacheKeys.ProductBySlug(slug);
+        // Intentionally NOT cached for the same reason as GetByIdAsync: this
+        // method also feeds the write path (UpdateProduct), which must mutate
+        // fresh, change-tracked entities.
+        return _inner.GetByIdWithDetailsAsync(id, cancellationToken);
+    }
 
-        var cached = await _cache.GetAsync<Product>(cacheKey, cancellationToken);
+    public async Task<ProductDetailRead?> GetProductDetailAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        // Pure read model - safe to cache. Update/Delete invalidate this key
+        // via CacheKeys.ProductById; stock changes ride out the TTL.
+        var cacheKey = CacheKeys.ProductById(id);
+
+        var cached = await _cache.GetAsync<ProductDetailRead>(cacheKey, cancellationToken);
         if (cached is not null)
             return cached;
 
-        var product = await _inner.GetBySlugAsync(slug, cancellationToken);
+        var detail = await _inner.GetProductDetailAsync(id, cancellationToken);
 
-        if (product is not null)
+        if (detail is not null)
         {
-            await _cache.SetAsync(cacheKey, product, CacheKeys.ProductDetailExpiration, cancellationToken);
+            await _cache.SetAsync(cacheKey, detail, CacheKeys.ProductDetailExpiration, cancellationToken);
         }
 
-        return product;
+        return detail;
+    }
+
+    public Task<List<Guid>?> GetCategoryIdsAsync(Guid productId, CancellationToken cancellationToken = default)
+    {
+        // Tiny projection feeding the related-products query; the related
+        // list itself is cached, so this stays a plain pass-through.
+        return _inner.GetCategoryIdsAsync(productId, cancellationToken);
+    }
+
+    public Task<bool> HasOrderItemsAsync(Guid productId, CancellationToken cancellationToken = default)
+    {
+        // Pure EXISTS probe - no cache needed.
+        return _inner.HasOrderItemsAsync(productId, cancellationToken);
+    }
+
+    public async Task<ProductDetailRead?> GetBySlugAsync(string slug, CancellationToken cancellationToken = default)
+    {
+        // Cache the flat projection, not an entity graph - small payload,
+        // no circular navigations, no IgnoreCycles serialization cost.
+        var cacheKey = CacheKeys.ProductBySlug(slug);
+
+        var cached = await _cache.GetAsync<ProductDetailRead>(cacheKey, cancellationToken);
+        if (cached is not null)
+            return cached;
+
+        var detail = await _inner.GetBySlugAsync(slug, cancellationToken);
+
+        if (detail is not null)
+        {
+            await _cache.SetAsync(cacheKey, detail, CacheKeys.ProductDetailExpiration, cancellationToken);
+        }
+
+        return detail;
     }
 
     public Task<IReadOnlyList<Product>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -93,12 +136,13 @@ public class CachedProductRepository : IProductRepository
         return _inner.ExistsBySkuAsync(sku, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<Product>> GetRelatedProductsAsync(
+    public async Task<IReadOnlyList<RelatedProductRead>> GetRelatedProductsAsync(
         Guid productId, List<Guid> categoryIds, int count, CancellationToken cancellationToken = default)
     {
+        // Cache the projected read models - tiny flat payloads.
         var cacheKey = CacheKeys.ProductRelated(productId);
 
-        var cached = await _cache.GetAsync<List<Product>>(cacheKey, cancellationToken);
+        var cached = await _cache.GetAsync<List<RelatedProductRead>>(cacheKey, cancellationToken);
         if (cached is not null)
             return cached;
 
@@ -119,17 +163,18 @@ public class CachedProductRepository : IProductRepository
 
     public void Update(Product entity)
     {
-        // IRepository<T> contract. Prefer UpdateAsync - this member schedules
-        // cache invalidation without blocking (the cache service swallows its
-        // own failures, so fire-and-forget here is safe).
-        _ = UpdateCoreAsync(entity, CancellationToken.None);
+        // IRepository<T> contract. Synchronous callers get the EF state change
+        // only: cache invalidation happens exclusively in UpdateAsync so it is
+        // awaited in the request flow instead of racing past the response as a
+        // fire-and-forget task. All write-path handlers use UpdateAsync.
+        _inner.Update(entity);
     }
 
     public void Delete(Product entity)
     {
-        // IRepository<T> contract. Prefer DeleteAsync - see Update for why
-        // invalidation is fire-and-forget instead of blocking.
-        _ = DeleteCoreAsync(entity, CancellationToken.None);
+        // IRepository<T> contract. See Update: invalidation is awaited in
+        // DeleteAsync, never fired-and-forgotten here.
+        _inner.Delete(entity);
     }
 
     private async Task UpdateCoreAsync(Product entity, CancellationToken cancellationToken)

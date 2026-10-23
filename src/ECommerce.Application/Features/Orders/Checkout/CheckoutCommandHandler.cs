@@ -206,25 +206,24 @@ public class CheckoutCommandHandler : ICommandHandler<CheckoutCommand, CheckoutR
         await _orderRepository.AddAsync(order, cancellationToken);
 
         // 6b. Record discount usage (atomic within the same transaction).
-        if (!string.IsNullOrWhiteSpace(pricing.AppliedDiscountCode))
+        // Reuses the entity the calculator already loaded - no second fetch.
+        if (pricing.AppliedDiscount is not null)
         {
-            var appliedDiscount = await _discountRepository.GetByCodeAsync(pricing.AppliedDiscountCode, cancellationToken);
-            if (appliedDiscount is not null)
-            {
-                appliedDiscount.IncrementUsage();
-                _discountRepository.Update(appliedDiscount);
-            }
+            pricing.AppliedDiscount.IncrementUsage();
+            _discountRepository.Update(pricing.AppliedDiscount);
         }
 
         // 7. Clear cart
         cart.Items.Clear();
         _cartRepository.Update(cart);
 
-        // 8. Commit transaction (atomic - all or nothing)
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-        // 9. Enqueue order confirmation email (background job, does not block response)
+        // 8. Enqueue order confirmation email inside the unit of work: the
+        // outbox row commits atomically with the order (transactional outbox),
+        // so the job cannot be lost to a crash or restart after checkout.
         await _jobQueue.EnqueueAsync(new SendOrderConfirmationJob(order.Id), cancellationToken);
+
+        // 9. Commit transaction (atomic - all or nothing)
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var resultDto = new CheckoutResultDto(
             order.Id,

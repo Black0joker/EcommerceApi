@@ -232,6 +232,9 @@ namespace ECommerce.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("IX_Carts_ExpiresAt");
+
                     b.HasIndex("UserId")
                         .IsUnique()
                         .HasDatabaseName("IX_Carts_UserId");
@@ -816,6 +819,9 @@ namespace ECommerce.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<double>("AverageRating")
+                        .HasColumnType("float");
+
                     b.Property<decimal?>("CompareAtPrice")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -844,6 +850,9 @@ namespace ECommerce.Infrastructure.Persistence.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<int>("RatingCount")
+                        .HasColumnType("int");
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .IsRequired()
@@ -867,6 +876,9 @@ namespace ECommerce.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(max)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("AverageRating")
+                        .HasDatabaseName("IX_Products_AverageRating");
 
                     b.HasIndex("CreatedAt")
                         .HasDatabaseName("IX_Products_CreatedAt");
@@ -1122,6 +1134,45 @@ namespace ECommerce.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("IX_WishlistItems_WishlistId_ProductId");
 
                     b.ToTable("WishlistItems", (string)null);
+                });
+
+            modelBuilder.Entity("ECommerce.Infrastructure.Persistence.Outbox.OutboxJob", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("JobType")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("ProcessedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Id")
+                        .HasDatabaseName("IX_OutboxJobs_Pending")
+                        .HasFilter("[ProcessedAtUtc] IS NULL");
+
+                    b.ToTable("OutboxJobs", (string)null);
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", b =>

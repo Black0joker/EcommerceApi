@@ -29,12 +29,37 @@ public class ReviewRepository : IReviewRepository
 
     public async Task<IReadOnlyList<Review>> GetByProductIdAsync(Guid productId, CancellationToken cancellationToken = default)
     {
+        // Pure read: skip change tracking.
         return await _context.Reviews
             .AsNoTracking()
             .Include(r => r.User)
             .Where(r => r.ProductId == productId)
             .OrderByDescending(r => r.CreatedAt)
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task<(IReadOnlyList<Review> Reviews, int TotalCount)> GetApprovedByProductIdPagedAsync(
+        Guid productId,
+        int pageNumber,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        // The IsApproved filter lives in SQL instead of client-side filtering,
+        // and only the requested page is materialized.
+        var query = _context.Reviews
+            .AsNoTracking()
+            .Where(r => r.ProductId == productId && r.IsApproved);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var reviews = await query
+            .Include(r => r.User)
+            .OrderByDescending(r => r.CreatedAt)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return (reviews, totalCount);
     }
 
     public async Task<bool> HasUserPurchasedProductAsync(Guid userId, Guid productId, CancellationToken cancellationToken = default)
@@ -63,6 +88,23 @@ public class ReviewRepository : IReviewRepository
     {
         return await _context.Reviews
             .CountAsync(r => r.ProductId == productId && r.IsApproved, cancellationToken);
+    }
+
+    public async Task RecalculateProductRatingAsync(Guid productId, CancellationToken cancellationToken = default)
+    {
+        var product = await _context.Products
+            .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
+        if (product is null)
+        {
+            return;
+        }
+
+        product.RatingCount = await _context.Reviews
+            .CountAsync(r => r.ProductId == productId && r.IsApproved, cancellationToken);
+
+        product.AverageRating = await _context.Reviews
+            .Where(r => r.ProductId == productId && r.IsApproved)
+            .AverageAsync(r => (double?)r.Rating, cancellationToken) ?? 0;
     }
 
     public async Task<IReadOnlyList<Review>> GetAllAsync(CancellationToken cancellationToken = default)

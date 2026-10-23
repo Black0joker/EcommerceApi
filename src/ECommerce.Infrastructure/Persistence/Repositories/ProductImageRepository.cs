@@ -31,6 +31,7 @@ public class ProductImageRepository : IProductImageRepository
 
     public async Task<ProductImage?> GetPrimaryByProductIdAsync(Guid productId, CancellationToken cancellationToken = default)
     {
+        // Pure read: skip change tracking.
         return await _context.ProductImages
             .AsNoTracking()
             .FirstOrDefaultAsync(i => i.ProductId == productId && i.IsPrimary, cancellationToken);
